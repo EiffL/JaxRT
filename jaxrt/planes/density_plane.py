@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
 import jax_cosmo as jc
+from ..utils import interpolate_density_at_positions
 
 
 class DensityPlane:
@@ -69,62 +70,12 @@ class DensityPlane:
         Returns:
             Interpolated density values [n_rays]
         """
-        return _interpolate_density_at_positions(
+        return interpolate_density_at_positions(
             self.density_map, positions, self.map_size_rad, self.resolution
         )
 
 
-@jax.jit
-def _interpolate_density_at_positions(
-    density_map: jnp.ndarray,
-    positions: jnp.ndarray,
-    map_size_rad: float,
-    map_resolution: int
-) -> jnp.ndarray:
-    """
-    Interpolate density values at given angular positions using bilinear interpolation.
-    
-    Args:
-        density_map: 2D density map [map_resolution, map_resolution]
-        positions: Angular positions [2, n_rays] in radians
-        map_size_rad: Physical size of the map in radians
-        map_resolution: Resolution of the density map
-        
-    Returns:
-        Interpolated density values [n_rays]
-    """
-    # Convert angular positions to pixel coordinates
-    pixel_coords = positions * (map_resolution - 1) / map_size_rad
-    
-    # Ensure coordinates are within bounds
-    pixel_coords = jnp.clip(pixel_coords, 0, map_resolution - 1)
-    
-    # Get integer and fractional parts
-    i_coords = jnp.floor(pixel_coords).astype(int)
-    f_coords = pixel_coords - i_coords
-    
-    # Extract x and y coordinates
-    x_i, y_i = i_coords[0], i_coords[1]
-    x_f, y_f = f_coords[0], f_coords[1]
-    
-    # Ensure we don't go out of bounds for i+1
-    x_i1 = jnp.minimum(x_i + 1, map_resolution - 1)
-    y_i1 = jnp.minimum(y_i + 1, map_resolution - 1)
-    
-    # Bilinear interpolation
-    f00 = density_map[y_i, x_i]
-    f10 = density_map[y_i, x_i1]
-    f01 = density_map[y_i1, x_i]
-    f11 = density_map[y_i1, x_i1]
-    
-    result = (
-        f00 * (1 - x_f) * (1 - y_f) +
-        f10 * x_f * (1 - y_f) +
-        f01 * (1 - x_f) * y_f +
-        f11 * x_f * y_f
-    )
-    
-    return result
+# Interpolation function moved to utils.interpolation module
 
 
 def generate_gaussian_density_plane(
@@ -176,9 +127,28 @@ def generate_gaussian_density_plane(
     # Apply power spectrum
     density_fourier = noise_fourier * jnp.sqrt(power_spectrum / 2.0)
     
-    # Ensure Hermitian symmetry for real output
+    # Ensure proper Hermitian symmetry for real output
     # This is needed for jnp.fft.ifft2 to produce real output
-    density_fourier = density_fourier.at[0, 0].set(0.0)  # DC component
+    # Set DC component to zero (real)
+    density_fourier = density_fourier.at[0, 0].set(0.0)
+    
+    # Ensure Hermitian symmetry: F[k] = F*[-k] for real output
+    # Use jnp.fft.rfft2 approach: only generate half the frequencies
+    # and let the inverse FFT handle the symmetry automatically
+    # For now, just set problematic frequencies to be real
+    
+    # Make sure edge frequencies are real to avoid complex artifacts
+    # Set first row to be real (k_y = 0)
+    density_fourier = density_fourier.at[0, :].set(jnp.real(density_fourier[0, :]))
+    
+    # Set first column to be real (k_x = 0) 
+    density_fourier = density_fourier.at[:, 0].set(jnp.real(density_fourier[:, 0]))
+    
+    # If even resolution, set Nyquist frequencies to be real
+    if resolution % 2 == 0:
+        nyquist = resolution // 2
+        density_fourier = density_fourier.at[nyquist, :].set(jnp.real(density_fourier[nyquist, :]))
+        density_fourier = density_fourier.at[:, nyquist].set(jnp.real(density_fourier[:, nyquist]))
     
     # Transform back to real space
     density_field = jnp.real(jnp.fft.ifft2(density_fourier))

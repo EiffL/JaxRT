@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 from typing import List, Tuple, Optional
 import jax_cosmo as jc
+from ..utils import interpolate_density_at_positions
 
 
 @jax.jit
@@ -28,60 +29,153 @@ def lensing_kernel(chi: jnp.ndarray, chi_source: float) -> jnp.ndarray:
     return jnp.where(chi < chi_source, 1.0 - chi / chi_source, 0.0)
 
 
+# Interpolation function moved to utils.interpolation module
+
+
+def _validate_born_convergence_inputs(
+    ray_positions: jnp.ndarray,
+    density_planes: List[jnp.ndarray],
+    plane_distances: jnp.ndarray,
+    source_distance: float,
+    map_size_rad: float,
+    map_resolution: int
+) -> None:
+    """
+    Validate inputs for born_convergence function.
+    
+    Args:
+        ray_positions: Angular positions of rays [2, n_rays] in radians
+        density_planes: List of density maps
+        plane_distances: Comoving distances to each plane [n_planes] in Mpc
+        source_distance: Comoving distance to source in Mpc
+        map_size_rad: Angular size of each density map in radians
+        map_resolution: Resolution of each density map
+        
+    Raises:
+        ValueError: If inputs are invalid
+    """
+    if ray_positions.ndim != 2 or ray_positions.shape[0] != 2:
+        raise ValueError(f"ray_positions must have shape [2, n_rays], got {ray_positions.shape}")
+    
+    if len(density_planes) == 0:
+        raise ValueError("density_planes cannot be empty")
+    
+    if len(density_planes) != len(plane_distances):
+        raise ValueError(
+            f"Number of density_planes ({len(density_planes)}) must match "
+            f"number of plane_distances ({len(plane_distances)})"
+        )
+    
+    if source_distance <= 0:
+        raise ValueError(f"source_distance must be positive, got {source_distance}")
+    
+    if map_size_rad <= 0:
+        raise ValueError(f"map_size_rad must be positive, got {map_size_rad}")
+    
+    if map_resolution <= 0:
+        raise ValueError(f"map_resolution must be positive, got {map_resolution}")
+    
+    # Check that all density planes have the correct shape
+    for i, plane in enumerate(density_planes):
+        expected_shape = (map_resolution, map_resolution)
+        if plane.shape != expected_shape:
+            raise ValueError(
+                f"density_planes[{i}] has shape {plane.shape}, expected {expected_shape}"
+            )
+    
+    # Check that plane distances are sorted and positive
+    if jnp.any(plane_distances <= 0):
+        raise ValueError("All plane_distances must be positive")
+    
+    if jnp.any(plane_distances[1:] <= plane_distances[:-1]):
+        raise ValueError("plane_distances must be sorted in ascending order")
+    
+    if jnp.any(plane_distances >= source_distance):
+        raise ValueError("All plane_distances must be less than source_distance")
+
+
 @jax.jit
-def _interpolate_density_at_positions(
-    density_map: jnp.ndarray,
-    positions: jnp.ndarray,
+def _compute_distance_intervals(plane_distances: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute distance intervals between planes with proper edge handling.
+    
+    Args:
+        plane_distances: Comoving distances to each plane [n_planes] in Mpc
+        
+    Returns:
+        Distance intervals [n_planes] in Mpc
+    """
+    n_planes = len(plane_distances)
+    
+    # For multiple planes, use forward differences for interior points
+    # and backward difference for the last point
+    intervals = jnp.zeros(n_planes)
+    
+    if n_planes == 1:
+        # For single plane, use a default interval based on typical lensing distances
+        # This is more physically meaningful than arbitrary 1.0
+        intervals = intervals.at[0].set(plane_distances[0] / 10.0)
+    else:
+        # Forward differences for all but the last plane
+        forward_diffs = plane_distances[1:] - plane_distances[:-1]
+        intervals = intervals.at[:-1].set(forward_diffs)
+        
+        # For the last plane, use the same interval as the previous one
+        intervals = intervals.at[-1].set(forward_diffs[-1])
+    
+    return intervals
+
+
+@jax.jit 
+def _vectorized_born_convergence_core(
+    ray_positions: jnp.ndarray,
+    density_planes_array: jnp.ndarray,
+    plane_distances: jnp.ndarray,
+    source_distance: float,
     map_size_rad: float,
     map_resolution: int
 ) -> jnp.ndarray:
     """
-    Interpolate density values at given angular positions using bilinear interpolation.
+    Vectorized core computation for Born convergence.
+    
+    This function is fully vectorized and JIT-compilable.
     
     Args:
-        density_map: 2D density map [map_resolution, map_resolution]
-        positions: Angular positions [2, n_rays] in radians
-        map_size_rad: Physical size of the map in radians
-        map_resolution: Resolution of the density map
+        ray_positions: Angular positions of rays [2, n_rays] in radians
+        density_planes_array: Density maps [n_planes, map_resolution, map_resolution]
+        plane_distances: Comoving distances to each plane [n_planes] in Mpc
+        source_distance: Comoving distance to source in Mpc
+        map_size_rad: Angular size of each density map in radians
+        map_resolution: Resolution of each density map
         
     Returns:
-        Interpolated density values [n_rays]
+        Convergence values at ray positions [n_rays]
     """
-    # Convert angular positions to pixel coordinates
-    # positions are in radians, ranging from 0 to map_size_rad
-    pixel_coords = positions * (map_resolution - 1) / map_size_rad
+    n_planes, _, _ = density_planes_array.shape
+    n_rays = ray_positions.shape[1]
     
-    # Ensure coordinates are within bounds
-    pixel_coords = jnp.clip(pixel_coords, 0, map_resolution - 1)
+    # Compute lensing kernel for all planes
+    kernels = lensing_kernel(plane_distances, source_distance)
     
-    # Get integer and fractional parts
-    i_coords = jnp.floor(pixel_coords).astype(int)
-    f_coords = pixel_coords - i_coords
+    # Compute distance intervals  
+    d_chi = _compute_distance_intervals(plane_distances)
     
-    # Extract x and y coordinates
-    x_i, y_i = i_coords[0], i_coords[1]
-    x_f, y_f = f_coords[0], f_coords[1]
+    # Vectorized interpolation for all planes at once
+    def interpolate_single_plane(plane_data):
+        plane, kernel, interval = plane_data
+        density_at_rays = interpolate_density_at_positions(
+            plane, ray_positions, map_size_rad, map_resolution
+        )
+        return density_at_rays * kernel * interval
     
-    # Ensure we don't go out of bounds for i+1
-    x_i1 = jnp.minimum(x_i + 1, map_resolution - 1)
-    y_i1 = jnp.minimum(y_i + 1, map_resolution - 1)
+    # Use vmap to vectorize over planes
+    plane_data = (density_planes_array, kernels, d_chi)
+    contributions = jax.vmap(interpolate_single_plane, in_axes=(0,))(plane_data)
     
-    # Bilinear interpolation
-    # Get the four corner values
-    f00 = density_map[y_i, x_i]
-    f10 = density_map[y_i, x_i1]
-    f01 = density_map[y_i1, x_i]
-    f11 = density_map[y_i1, x_i1]
+    # Sum contributions from all planes
+    convergence = jnp.sum(contributions, axis=0)
     
-    # Interpolate
-    result = (
-        f00 * (1 - x_f) * (1 - y_f) +
-        f10 * x_f * (1 - y_f) +
-        f01 * (1 - x_f) * y_f +
-        f11 * x_f * y_f
-    )
-    
-    return result
+    return convergence
 
 
 @jax.jit
@@ -101,6 +195,9 @@ def born_convergence(
     
     where W(χ, χs) = (1 - χ/χs) is the lensing kernel.
     
+    This version uses vectorized operations for improved performance
+    and proper distance interval calculation to avoid edge case bugs.
+    
     Args:
         ray_positions: Angular positions of rays [2, n_rays] in radians
         density_planes: List of density maps, each [map_resolution, map_resolution]
@@ -112,33 +209,52 @@ def born_convergence(
     Returns:
         Convergence values at ray positions [n_rays]
     """
-    n_rays = ray_positions.shape[1]
-    n_planes = len(density_planes)
+    # Convert list to array for vectorized operations
+    density_planes_array = jnp.array(density_planes)
     
-    # Initialize convergence array
-    convergence = jnp.zeros(n_rays)
+    return _vectorized_born_convergence_core(
+        ray_positions, density_planes_array, plane_distances,
+        source_distance, map_size_rad, map_resolution
+    )
+
+
+def born_convergence_safe(
+    ray_positions: jnp.ndarray,
+    density_planes: List[jnp.ndarray],
+    plane_distances: jnp.ndarray,
+    source_distance: float,
+    map_size_rad: float,
+    map_resolution: int
+) -> jnp.ndarray:
+    """
+    Safe version of born_convergence with comprehensive input validation.
     
-    # Compute lensing kernel for all planes
-    kernels = lensing_kernel(plane_distances, source_distance)
+    This version includes full input validation but cannot be JIT compiled.
+    Use this for debugging or when you need validation, otherwise use the JIT version.
     
-    # Integrate over all planes
-    for i in range(n_planes):
-        # Interpolate density at ray positions
-        density_at_rays = _interpolate_density_at_positions(
-            density_planes[i], ray_positions, map_size_rad, map_resolution
-        )
+    Args:
+        ray_positions: Angular positions of rays [2, n_rays] in radians
+        density_planes: List of density maps, each [map_resolution, map_resolution]
+        plane_distances: Comoving distances to each plane [n_planes] in Mpc
+        source_distance: Comoving distance to source in Mpc
+        map_size_rad: Angular size of each density map in radians
+        map_resolution: Resolution of each density map
         
-        # Add contribution to convergence
-        # For discrete planes, we need to multiply by the distance interval
-        if i < n_planes - 1:
-            d_chi = plane_distances[i + 1] - plane_distances[i]
-        else:
-            # For the last plane, use the same interval as the previous one
-            d_chi = plane_distances[i] - plane_distances[i - 1] if i > 0 else 1.0
-            
-        convergence += density_at_rays * kernels[i] * d_chi
+    Returns:
+        Convergence values at ray positions [n_rays]
+        
+    Raises:
+        ValueError: If inputs are invalid
+    """
+    _validate_born_convergence_inputs(
+        ray_positions, density_planes, plane_distances,
+        source_distance, map_size_rad, map_resolution
+    )
     
-    return convergence
+    return born_convergence(
+        ray_positions, density_planes, plane_distances,
+        source_distance, map_size_rad, map_resolution
+    )
 
 
 def born_convergence_from_cosmology(
