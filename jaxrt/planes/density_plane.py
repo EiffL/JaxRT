@@ -1,81 +1,13 @@
 """
 Density plane utilities for gravitational lensing.
 
-This module provides tools for creating and manipulating density planes
+This module provides functions for generating Gaussian density planes
 used in gravitational lensing ray tracing calculations.
 """
 
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
-import jax_cosmo as jc
-from ..utils import interpolate_density_at_positions
-
-
-class DensityPlane:
-    """
-    A density plane for gravitational lensing calculations.
-    
-    This class represents a 2D density field at a specific redshift,
-    used for ray tracing through gravitational lensing simulations.
-    """
-    
-    def __init__(
-        self,
-        density_map: jnp.ndarray,
-        map_size_rad: float,
-        redshift: float,
-        cosmology: Optional[jc.Cosmology] = None
-    ):
-        """
-        Initialize a density plane.
-        
-        Args:
-            density_map: 2D density field [n_pix, n_pix]
-            map_size_rad: Physical angular size of the map in radians
-            redshift: Redshift of the plane
-            cosmology: JAX-Cosmo cosmology (default: Planck18)
-        """
-        self.density_map = density_map
-        self.map_size_rad = map_size_rad
-        self.redshift = redshift
-        self.resolution = density_map.shape[0]
-        
-        if cosmology is None:
-            cosmology = jc.Planck18()
-        self.cosmology = cosmology
-        
-        # Compute comoving distance
-        self.comoving_distance = jc.background.radial_comoving_distance(
-            cosmology, 1.0 / (1.0 + redshift)
-        )
-    
-    @property
-    def pixel_size_rad(self) -> float:
-        """Pixel size in radians."""
-        return self.map_size_rad / self.resolution
-    
-    @property 
-    def pixel_size_arcmin(self) -> float:
-        """Pixel size in arcminutes."""
-        return self.pixel_size_rad * 180.0 * 60.0 / jnp.pi
-    
-    def interpolate_at_positions(self, positions: jnp.ndarray) -> jnp.ndarray:
-        """
-        Interpolate density values at given angular positions.
-        
-        Args:
-            positions: Angular positions [2, n_rays] in radians
-            
-        Returns:
-            Interpolated density values [n_rays]
-        """
-        return interpolate_density_at_positions(
-            self.density_map, positions, self.map_size_rad, self.resolution
-        )
-
-
-# Interpolation function moved to utils.interpolation module
 
 
 def generate_gaussian_density_plane(
@@ -116,7 +48,6 @@ def generate_gaussian_density_plane(
     power_spectrum = power_spectrum.at[0, 0].set(0.0)
     
     # Generate Gaussian random field in Fourier space
-    # Split key for real and imaginary parts
     key1, key2 = jax.random.split(random_key)
     
     # Generate complex Gaussian noise
@@ -128,23 +59,13 @@ def generate_gaussian_density_plane(
     density_fourier = noise_fourier * jnp.sqrt(power_spectrum / 2.0)
     
     # Ensure proper Hermitian symmetry for real output
-    # This is needed for jnp.fft.ifft2 to produce real output
-    # Set DC component to zero (real)
-    density_fourier = density_fourier.at[0, 0].set(0.0)
+    density_fourier = density_fourier.at[0, 0].set(0.0)  # DC component real
     
-    # Ensure Hermitian symmetry: F[k] = F*[-k] for real output
-    # Use jnp.fft.rfft2 approach: only generate half the frequencies
-    # and let the inverse FFT handle the symmetry automatically
-    # For now, just set problematic frequencies to be real
-    
-    # Make sure edge frequencies are real to avoid complex artifacts
-    # Set first row to be real (k_y = 0)
+    # Make edge frequencies real to avoid complex artifacts
     density_fourier = density_fourier.at[0, :].set(jnp.real(density_fourier[0, :]))
-    
-    # Set first column to be real (k_x = 0) 
     density_fourier = density_fourier.at[:, 0].set(jnp.real(density_fourier[:, 0]))
     
-    # If even resolution, set Nyquist frequencies to be real
+    # Nyquist frequencies (if even resolution)
     if resolution % 2 == 0:
         nyquist = resolution // 2
         density_fourier = density_fourier.at[nyquist, :].set(jnp.real(density_fourier[nyquist, :]))
@@ -179,7 +100,7 @@ def create_density_planes_sequence(
         
     Returns:
         Tuple of (density_planes, redshifts)
-        - density_planes: List of density maps [n_planes, resolution, resolution]
+        - density_planes: Array of density maps [n_planes, resolution, resolution]
         - redshifts: Array of redshifts [n_planes]
     """
     # Create redshift array

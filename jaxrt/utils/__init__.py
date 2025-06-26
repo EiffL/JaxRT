@@ -1,11 +1,5 @@
 """Utility functions for JaxRT."""
 
-from .interpolation import (
-    interpolate_density_at_positions,
-    interpolate_density_at_positions_safe
-)
+# Utilities will be added here as needed
 
-__all__ = [
-    "interpolate_density_at_positions",
-    "interpolate_density_at_positions_safe"
-]
+__all__ = []
