@@ -1,9 +1,5 @@
 # JaxRT
 
-[![Tests](https://github.com/EiffL/JaxRT/workflows/Tests/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/test.yml)
-[![Code Quality](https://github.com/EiffL/JaxRT/workflows/Code%20Quality/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/lint.yml)
-[![Documentation](https://github.com/EiffL/JaxRT/workflows/Documentation/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/docs.yml)
-
 JAX-based gravitational lensing ray tracing library - a pure JAX reimplementation of ray tracing techniques from LensTools.
 
 ## Overview
@@ -101,7 +97,6 @@ This will:
 - Compute Born convergence with JAX
 - Compare with LensTools reference (if available)
 - Create visualization plots
-- Show performance benchmarks
 
 ## Testing
 
@@ -161,22 +156,6 @@ Where:
 - **Vectorized Interpolation**: Efficient bilinear interpolation for arbitrary ray positions
 - **Cosmological Integration**: Uses jax-cosmo for consistent distance calculations
 - **Modular Design**: Separate modules for planes, maps, and core algorithms
-
-## Performance
-
-Initial benchmarks show significant speedup over LensTools:
-
-- **JAX (CPU)**: ~2-3x faster than LensTools
-- **JAX (GPU)**: Expected ~10-50x speedup (GPU-dependent)
-- **Memory Usage**: Comparable or lower due to JAX optimizations
-
-## Validation
-
-The implementation is validated against LensTools reference:
-
-- **Statistical Agreement**: Mean, RMS, and higher-order moments match within ~1%
-- **Spatial Correlation**: >95% correlation with reference implementation
-- **Cosmological Consistency**: Proper scaling with source redshift and cosmology
 
 ## Roadmap
 
