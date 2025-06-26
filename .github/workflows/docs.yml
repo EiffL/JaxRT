@@ -1,0 +1,105 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -e .
+        
+    - name: Check documentation completeness
+      run: |
+        python -c "
+        import os
+        import sys
+        
+        print('Checking documentation completeness...')
+        
+        required_files = [
+            'README.md',
+            'CLAUDE.md', 
+            'pyproject.toml',
+            'requirements.txt'
+        ]
+        
+        missing_files = []
+        for file in required_files:
+            if not os.path.exists(file):
+                missing_files.append(file)
+                
+        if missing_files:
+            print(f'❌ Missing documentation files: {missing_files}')
+            sys.exit(1)
+            
+        # Check that README has key sections
+        with open('README.md', 'r') as f:
+            readme_content = f.read()
+            
+        required_sections = [
+            '# JaxRT',
+            '## Installation',
+            '## Quick Start', 
+            '## Testing',
+            '## Performance'
+        ]
+        
+        missing_sections = []
+        for section in required_sections:
+            if section not in readme_content:
+                missing_sections.append(section)
+                
+        if missing_sections:
+            print(f'❌ Missing README sections: {missing_sections}')
+            sys.exit(1)
+            
+        print('✓ Documentation completeness check passed')
+        "
+        
+    - name: Validate package metadata
+      run: |
+        python -c "
+        import jaxrt
+        
+        # Check version is defined
+        assert hasattr(jaxrt, '__version__'), 'Package version not defined'
+        print(f'Package version: {jaxrt.__version__}')
+        
+        # Check main exports are available
+        required_exports = ['born_convergence', 'DensityPlane', 'ConvergenceMap']
+        for export in required_exports:
+            assert hasattr(jaxrt, export), f'Missing export: {export}'
+            
+        print('✓ Package metadata validation passed')
+        "
+        
+    - name: Test example code in README
+      run: |
+        python -c "
+        # Test that the example code in README can at least import correctly
+        try:
+            import jax.numpy as jnp
+            from jaxrt import born_convergence_from_cosmology
+            from jaxrt.planes import create_density_planes_sequence  
+            from jaxrt.maps import create_ray_grid
+            print('✓ README example imports work')
+        except Exception as e:
+            print(f'❌ README example imports failed: {e}')
+            raise
+        "

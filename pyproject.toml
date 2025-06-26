@@ -39,6 +39,7 @@ test = [
     "pytest>=6.0",
     "pytest-cov",
     "lenstools",  # For comparison tests
+    "matplotlib>=3.5.0",  # For demo and visualization
 ]
 dev = [
     "pytest>=6.0",
@@ -46,7 +47,17 @@ dev = [
     "black",
     "isort",
     "flake8",
+    "mypy",
     "lenstools",
+    "matplotlib>=3.5.0",
+]
+ci = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "isort", 
+    "flake8",
+    "matplotlib>=3.5.0",
 ]
 
 [project.urls]
@@ -63,3 +74,33 @@ target-version = ["py38", "py39", "py310", "py311"]
 [tool.isort]
 profile = "black"
 line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=jaxrt",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "lenstools: marks tests that require LensTools package",
+]
+
+[tool.coverage.run]
+source = ["jaxrt"]
+omit = ["tests/*", "setup.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

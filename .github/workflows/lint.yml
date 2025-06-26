@@ -1,0 +1,45 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        
+    - name: Install linting dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install black isort flake8 mypy
+        
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff jaxrt tests
+        
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --diff jaxrt tests
+        
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 jaxrt --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. Line length compatible with Black
+        flake8 jaxrt --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+        
+    - name: Type checking with mypy (optional)
+      run: |
+        # Install stubs and run mypy (allow failures for now)
+        pip install types-all || true
+        mypy jaxrt --ignore-missing-imports || echo "MyPy checks completed with warnings"
