@@ -1,5 +1,9 @@
 # JaxRT
 
+[![Tests](https://github.com/EiffL/JaxRT/workflows/Tests/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/test.yml)
+[![Code Quality](https://github.com/EiffL/JaxRT/workflows/Code%20Quality/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/lint.yml)
+[![Documentation](https://github.com/EiffL/JaxRT/workflows/Documentation/badge.svg)](https://github.com/EiffL/JaxRT/actions/workflows/docs.yml)
+
 JAX-based gravitational lensing ray tracing library - a pure JAX reimplementation of ray tracing techniques from LensTools.
 
 ## Overview
