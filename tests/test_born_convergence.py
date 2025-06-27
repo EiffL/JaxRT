@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 import pytest
-from astropy.units import deg, Mpc
+# JAX-cosmo units are used instead of astropy units
 
 # Import our JAX implementation
 import sys
@@ -164,9 +164,14 @@ class TestBornConvergence:
         # Setup LensTools RayTracer
         tracer = RayTracer(lens_mesh_size=params['resolution'])
         
-        # Add density planes to tracer
-        from astropy.cosmology import Planck18
-        cosmo = Planck18
+        # Add density planes to tracer - use astropy for LensTools compatibility
+        try:
+            from astropy.cosmology import Planck18
+            from astropy.units import deg
+            cosmo = Planck18
+        except ImportError:
+            # Fallback if astropy not available
+            pytest.skip("astropy required for LensTools comparison")
         
         for i, (density_map, z) in enumerate(zip(density_planes_np, redshifts)):
             # Create LensTools DensityPlane

@@ -31,7 +31,7 @@ dependencies = [
     "numpy>=1.21.0",
     "scipy>=1.7.0",
     "jax-cosmo>=0.1.0",
-    "astropy>=5.0.0",
+    "healpy>=1.16.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +39,7 @@ test = [
     "pytest>=6.0",
     "pytest-cov",
     "lenstools",  # For comparison tests
+    "astropy>=5.0.0",  # Required by LensTools for comparison tests
     "matplotlib>=3.5.0",  # For demo and visualization
 ]
 dev = [
@@ -49,6 +50,7 @@ dev = [
     "flake8",
     "mypy",
     "lenstools",
+    "astropy>=5.0.0",  # Required by LensTools for comparison tests
     "matplotlib>=3.5.0",
 ]
 ci = [
