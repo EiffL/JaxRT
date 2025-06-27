@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from astropy.cosmology import FlatLambdaCDM
+import jax_cosmo as jc
 
 from jaxrt.planes.shells import (
     create_density_shells_from_particles,
@@ -33,7 +33,16 @@ def mock_particles():
 @pytest.fixture
 def mock_cosmology():
     """Create mock cosmology for testing."""
-    return FlatLambdaCDM(H0=70, Om0=0.3)
+    return jc.Cosmology(
+        Omega_c=0.25,
+        Omega_b=0.05,
+        h=0.7,
+        sigma8=0.8,
+        n_s=0.96,
+        Omega_k=0.0,
+        w0=-1.0,
+        wa=0.0
+    )
 
 
 def test_compute_distances():

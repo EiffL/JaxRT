@@ -21,7 +21,6 @@ def _compute_distances(positions: jnp.ndarray, observer_position: jnp.ndarray) -
     return jnp.sqrt(jnp.sum(delta**2, axis=1))
 
 
-@jax.jit
 def _bin_particles_to_shell(
     positions: jnp.ndarray,
     masses: jnp.ndarray,
@@ -95,7 +94,6 @@ def _validate_inputs(
         raise ValueError("Shell distances must be positive")
 
 
-@jax.jit 
 def _bin_all_shells(
     positions: jnp.ndarray,
     masses: jnp.ndarray, 
@@ -173,7 +171,6 @@ def create_density_shells_from_particles(
     return shell_maps, shell_redshifts
 
 
-@jax.jit
 def _create_single_lightcone_shell(
     particle_positions: jnp.ndarray,
     particle_masses: jnp.ndarray,
@@ -266,7 +263,6 @@ def create_shells_from_lightcone(
     return shell_maps
 
 
-@jax.jit
 def _compute_single_convergence(
     shell_map: jnp.ndarray,
     shell_z: float,
@@ -277,10 +273,12 @@ def _compute_single_convergence(
     # Skip shells at or behind source
     def compute_convergence():
         # Angular diameter distances (in Mpc)
-        d_lens = jc.background.angular_diameter_distance(cosmology, 1.0 / (1.0 + shell_z))
-        d_source = jc.background.angular_diameter_distance(cosmology, 1.0 / (1.0 + source_redshift))
+        a_lens = 1.0 / (1.0 + shell_z)
+        a_source = 1.0 / (1.0 + source_redshift)
+        d_lens = jc.background.angular_diameter_distance(cosmology, a_lens)
+        d_source = jc.background.angular_diameter_distance(cosmology, a_source)
         d_lens_source = jc.background.angular_diameter_distance_z1z2(
-            cosmology, 1.0 / (1.0 + shell_z), 1.0 / (1.0 + source_redshift)
+            cosmology, a_lens, a_source
         )
         
         # Critical surface density using jax-cosmo constants
