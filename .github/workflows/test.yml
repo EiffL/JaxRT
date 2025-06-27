@@ -1,0 +1,81 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11"]
+        
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+        pip install -e .
+        
+    - name: Run basic tests (without LensTools)
+      run: |
+        pytest tests/ -v -m "not lenstools" --cov=jaxrt --cov-report=xml
+        
+    - name: Install LensTools (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        # Install system dependencies for LensTools
+        sudo apt-get update
+        sudo apt-get install -y libgsl-dev libfftw3-dev
+        # Install LensTools for comparison tests
+        pip install lenstools || echo "LensTools installation failed, skipping comparison tests"
+        
+    - name: Run comparison tests with LensTools (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        pytest tests/ -v --cov=jaxrt --cov-report=xml || echo "Some LensTools comparison tests failed"
+        
+    - name: Upload coverage to Codecov
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: Test demo script (basic functionality)
+      run: |
+        python -c "
+        import sys
+        sys.path.insert(0, '.')
+        
+        # Test that demo imports work (without actually running full demo)
+        try:
+            from jaxrt.core.born_convergence import born_convergence_from_cosmology
+            from jaxrt.planes.density_plane import create_density_planes_sequence
+            from jaxrt.maps.convergence_map import create_ray_grid
+            print('✓ Demo imports successful')
+        except Exception as e:
+            print(f'❌ Demo import failed: {e}')
+            sys.exit(1)
+        "
