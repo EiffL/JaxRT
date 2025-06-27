@@ -11,8 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import healpy as hp
 from typing import Optional, Tuple, Union
-from astropy.cosmology import FLRW
-import astropy.units as u
+import jax_cosmo as jc
 
 
 @jax.jit
@@ -57,8 +56,11 @@ def _bin_particles_to_shell(
     theta = jnp.arccos(jnp.clip(shell_unit_vectors[:, 2], -1, 1))
     phi = jnp.arctan2(shell_unit_vectors[:, 1], shell_unit_vectors[:, 0])
     
-    # Convert to HEALPix pixel indices
-    ipix = hp.ang2pix(nside, theta, phi, nest=False)
+    # Convert to HEALPix pixel indices - handle JAX/NumPy conversion properly
+    theta_np = np.array(theta)
+    phi_np = np.array(phi)
+    ipix = hp.ang2pix(nside, theta_np, phi_np, nest=False)
+    ipix = jnp.array(ipix)  # Convert back to JAX array
     
     # Bin masses into pixels using scatter-add
     npix = 12 * nside**2
@@ -74,6 +76,40 @@ def _bin_particles_to_shell(
     return surface_density
 
 
+def _validate_inputs(
+    particle_masses: jnp.ndarray,
+    nside: int,
+    shell_distances: jnp.ndarray,
+) -> None:
+    """Validate input parameters."""
+    # Check for negative masses
+    if jnp.any(particle_masses < 0):
+        raise ValueError("Particle masses must be non-negative")
+    
+    # Check nside is power of 2
+    if nside <= 0 or (nside & (nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of 2")
+    
+    # Check for non-positive shell distances
+    if jnp.any(shell_distances <= 0):
+        raise ValueError("Shell distances must be positive")
+
+
+@jax.jit 
+def _bin_all_shells(
+    positions: jnp.ndarray,
+    masses: jnp.ndarray, 
+    observer: jnp.ndarray,
+    distances: jnp.ndarray,
+    thickness: float,
+    nside: int,
+) -> jnp.ndarray:
+    """Vectorized binning of particles to all shells using jax.vmap."""
+    return jax.vmap(
+        lambda d: _bin_particles_to_shell(positions, masses, observer, d, thickness, nside)
+    )(distances)
+
+
 def create_density_shells_from_particles(
     particle_positions: jnp.ndarray,
     particle_masses: jnp.ndarray,
@@ -81,7 +117,7 @@ def create_density_shells_from_particles(
     shell_distances: jnp.ndarray,
     shell_thickness: float,
     nside: int,
-    cosmology: Optional[FLRW] = None,
+    cosmology: Optional[jc.Cosmology] = None,
 ) -> Tuple[jnp.ndarray, Optional[jnp.ndarray]]:
     """
     Create density shells from N-body simulation particles.
@@ -99,8 +135,8 @@ def create_density_shells_from_particles(
     shell_thickness : float
         Thickness of each shell in Mpc/h
     nside : int
-        HEALPix resolution parameter
-    cosmology : astropy.cosmology.FLRW, optional
+        HEALPix resolution parameter (must be power of 2)
+    cosmology : jax_cosmo.Cosmology, optional
         Cosmology object for distance-redshift conversion
         
     Returns
@@ -111,35 +147,67 @@ def create_density_shells_from_particles(
     shell_redshifts : jnp.ndarray, optional
         Redshifts corresponding to shell distances (if cosmology provided)
     """
-    n_shells = len(shell_distances)
-    npix = 12 * nside**2
+    # Input validation
+    _validate_inputs(particle_masses, nside, shell_distances)
     
-    # Initialize output arrays
-    shell_maps = jnp.zeros((n_shells, npix))
-    
-    # Process each shell
-    for i, shell_distance in enumerate(shell_distances):
-        shell_map = _bin_particles_to_shell(
-            particle_positions,
-            particle_masses,
-            observer_position,
-            shell_distance,
-            shell_thickness,
-            nside,
-        )
-        shell_maps = shell_maps.at[i].set(shell_map)
+    # Use vectorized shell creation for better performance
+    shell_maps = _bin_all_shells(
+        particle_positions,
+        particle_masses,
+        observer_position, 
+        shell_distances,
+        shell_thickness,
+        nside,
+    )
     
     # Convert distances to redshifts if cosmology provided
     shell_redshifts = None
     if cosmology is not None:
-        # Convert comoving distance to redshift
-        distances_with_units = shell_distances * u.Mpc / cosmology.h
-        shell_redshifts = jnp.array([
-            cosmology.z_at_value(cosmology.comoving_distance, d)
-            for d in distances_with_units
-        ])
+        # Convert comoving distance to redshift using jax-cosmo
+        # Distances are in Mpc/h, jax-cosmo expects Mpc
+        distances_mpc = shell_distances / cosmology.h
+        shell_redshifts = jax.vmap(
+            lambda d: jc.background.z_at_chi(cosmology, d)
+        )(distances_mpc)
     
     return shell_maps, shell_redshifts
+
+
+@jax.jit
+def _create_single_lightcone_shell(
+    particle_positions: jnp.ndarray,
+    particle_masses: jnp.ndarray,
+    particle_redshifts: jnp.ndarray,
+    observer_position: jnp.ndarray,
+    shell_z: float,
+    redshift_thickness: float,
+    nside: int,
+    shell_distance: float,
+) -> jnp.ndarray:
+    """Create a single shell from lightcone particles."""
+    # Find particles in redshift shell
+    z_min = shell_z - redshift_thickness / 2
+    z_max = shell_z + redshift_thickness / 2
+    in_shell = (particle_redshifts >= z_min) & (particle_redshifts <= z_max)
+    
+    # Handle case with no particles
+    n_in_shell = jnp.sum(in_shell)
+    
+    # Use conditional to avoid issues with empty arrays
+    shell_map = jnp.where(
+        n_in_shell > 0,
+        _bin_particles_to_shell(
+            particle_positions[in_shell], 
+            particle_masses[in_shell],
+            observer_position,
+            shell_distance,
+            redshift_thickness * shell_distance / jnp.maximum(shell_z, 1e-6),  # Avoid division by zero
+            nside,
+        ),
+        jnp.zeros(12 * nside**2)
+    )
+    
+    return shell_map
 
 
 def create_shells_from_lightcone(
@@ -150,7 +218,7 @@ def create_shells_from_lightcone(
     shell_redshifts: jnp.ndarray,
     redshift_thickness: float,
     nside: int,
-    cosmology: FLRW,
+    cosmology: jc.Cosmology,
 ) -> jnp.ndarray:
     """
     Create density shells from lightcone simulation particles using redshift binning.
@@ -170,8 +238,8 @@ def create_shells_from_lightcone(
     redshift_thickness : float
         Thickness of each redshift shell
     nside : int
-        HEALPix resolution parameter
-    cosmology : astropy.cosmology.FLRW
+        HEALPix resolution parameter (must be power of 2)
+    cosmology : jax_cosmo.Cosmology
         Cosmology object for distance calculations
         
     Returns
@@ -179,44 +247,77 @@ def create_shells_from_lightcone(
     shell_maps : jnp.ndarray
         Surface density maps for each shell with shape (n_shells, 12*nside**2)
     """
-    n_shells = len(shell_redshifts)
-    npix = 12 * nside**2
-    shell_maps = jnp.zeros((n_shells, npix))
+    # Input validation
+    _validate_inputs(particle_masses, nside, jnp.array([1.0]))  # Basic validation
     
-    for i, shell_z in enumerate(shell_redshifts):
-        # Find particles in redshift shell
-        z_min = shell_z - redshift_thickness / 2
-        z_max = shell_z + redshift_thickness / 2
-        in_shell = (particle_redshifts >= z_min) & (particle_redshifts <= z_max)
-        
-        if jnp.sum(in_shell) == 0:
-            continue
-            
-        shell_positions = particle_positions[in_shell]
-        shell_masses = particle_masses[in_shell]
-        
-        # Compute shell distance from cosmology
-        shell_distance = cosmology.comoving_distance(shell_z).to(u.Mpc).value * cosmology.h
-        
-        # Create shell map
-        shell_map = _bin_particles_to_shell(
-            shell_positions,
-            shell_masses,
-            observer_position,
-            shell_distance,
-            redshift_thickness * shell_distance / shell_z,  # Approximate thickness in Mpc/h
-            nside,
+    # Compute shell distances from cosmology
+    shell_distances = jax.vmap(
+        lambda z: jc.background.radial_comoving_distance(cosmology, 1.0 / (1.0 + z)) * cosmology.h
+    )(shell_redshifts)
+    
+    # Vectorized shell creation
+    shell_maps = jax.vmap(
+        lambda z, d: _create_single_lightcone_shell(
+            particle_positions, particle_masses, particle_redshifts,
+            observer_position, z, redshift_thickness, nside, d
         )
-        shell_maps = shell_maps.at[i].set(shell_map)
+    )(shell_redshifts, shell_distances)
     
     return shell_maps
+
+
+@jax.jit
+def _compute_single_convergence(
+    shell_map: jnp.ndarray,
+    shell_z: float,
+    source_redshift: float,
+    cosmology: jc.Cosmology,
+) -> jnp.ndarray:
+    """Compute convergence for a single shell."""
+    # Skip shells at or behind source
+    def compute_convergence():
+        # Angular diameter distances (in Mpc)
+        d_lens = jc.background.angular_diameter_distance(cosmology, 1.0 / (1.0 + shell_z))
+        d_source = jc.background.angular_diameter_distance(cosmology, 1.0 / (1.0 + source_redshift))
+        d_lens_source = jc.background.angular_diameter_distance_z1z2(
+            cosmology, 1.0 / (1.0 + shell_z), 1.0 / (1.0 + source_redshift)
+        )
+        
+        # Critical surface density using jax-cosmo constants
+        # σ_crit = c² / (4πG) * D_s / (D_l * D_ls)
+        c_light = 299792458.0  # m/s (exact)
+        G_newton = 6.67430e-11  # m³ kg⁻¹ s⁻² (2018 CODATA)
+        
+        # Convert to proper units: Msun/h per (Mpc/h)²
+        # Factor includes: unit conversions + h factors
+        Msun_kg = 1.989e30  # kg
+        Mpc_m = 3.086e22  # m
+        
+        # σ_crit in units of Msun/h per (Mpc/h)²
+        sigma_crit_factor = (c_light**2 / (4 * jnp.pi * G_newton)) * (Mpc_m**2 / Msun_kg)
+        sigma_crit = sigma_crit_factor * d_source / (d_lens * d_lens_source)
+        
+        # Account for h factors: distances from jax-cosmo don't include h
+        # shell_map is in Msun/h per (Mpc/h)², distances in Mpc
+        # Need to multiply by h for correct units
+        sigma_crit *= cosmology.h  
+        
+        # Convergence = surface density / critical surface density
+        return shell_map / sigma_crit
+    
+    # Only compute convergence for shells in front of source
+    return jnp.where(
+        shell_z < source_redshift,
+        compute_convergence(),
+        jnp.zeros_like(shell_map)
+    )
 
 
 def convert_shells_to_convergence(
     shell_maps: jnp.ndarray,
     shell_redshifts: jnp.ndarray,
     source_redshift: float,
-    cosmology: FLRW,
+    cosmology: jc.Cosmology,
 ) -> jnp.ndarray:
     """
     Convert surface density shells to convergence maps for weak lensing.
@@ -224,46 +325,25 @@ def convert_shells_to_convergence(
     Parameters
     ----------
     shell_maps : jnp.ndarray
-        Surface density maps with shape (n_shells, npix)
+        Surface density maps with shape (n_shells, npix) in Msun/h per (Mpc/h)²
     shell_redshifts : jnp.ndarray
         Redshifts of the shells
     source_redshift : float
         Redshift of source galaxies
-    cosmology : astropy.cosmology.FLRW
+    cosmology : jax_cosmo.Cosmology
         Cosmology object
         
     Returns
     -------
     convergence_maps : jnp.ndarray
-        Convergence maps with shape (n_shells, npix)
+        Convergence maps with shape (n_shells, npix) (dimensionless)
     """
-    # Critical surface density
-    c = 299792458  # m/s
-    G = 6.67430e-11  # m³ kg⁻¹ s⁻²
-    
-    # Convert units and compute critical surface density
-    critical_density = 3 * cosmology.H0**2 / (8 * jnp.pi * G)  # in proper units
-    
-    # Lensing efficiency
-    d_source = cosmology.angular_diameter_distance(source_redshift)
-    
-    convergence_maps = jnp.zeros_like(shell_maps)
-    
-    for i, shell_z in enumerate(shell_redshifts):
-        if shell_z >= source_redshift:
-            continue
-            
-        d_lens = cosmology.angular_diameter_distance(shell_z)
-        d_lens_source = cosmology.angular_diameter_distance_z1z2(shell_z, source_redshift)
-        
-        # Lensing efficiency
-        lensing_efficiency = d_lens * d_lens_source / d_source
-        
-        # Convert surface density to convergence
-        sigma_crit = critical_density * d_source / (d_lens * d_lens_source)
-        convergence_maps = convergence_maps.at[i].set(
-            shell_maps[i] / sigma_crit * lensing_efficiency
+    # Vectorized convergence computation
+    convergence_maps = jax.vmap(
+        lambda shell_map, shell_z: _compute_single_convergence(
+            shell_map, shell_z, source_redshift, cosmology
         )
+    )(shell_maps, shell_redshifts)
     
     return convergence_maps
 

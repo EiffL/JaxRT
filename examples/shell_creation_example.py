@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 import healpy as hp
-from astropy.cosmology import FlatLambdaCDM
+import jax_cosmo as jc
 
 from jaxrt import create_density_shells_from_particles, convert_shells_to_convergence
 
@@ -82,8 +82,8 @@ def main():
     print("=" * 40)
     
     # Set up cosmology
-    cosmology = FlatLambdaCDM(H0=70, Om0=0.3)
-    print(f"Using cosmology: {cosmology}")
+    cosmology = jc.Planck15()
+    print(f"Using cosmology: jax-cosmo Planck15")
     
     # Create mock simulation data
     print("\n1. Creating mock N-body simulation data...")
@@ -118,7 +118,7 @@ def main():
     )
     
     print(f"   Successfully created shells with shape: {shell_maps.shape}")
-    print(f"   Shell redshifts: {shell_redshifts}")
+    print(f"   Shell redshifts: {np.array(shell_redshifts)}")
     
     # Analyze shell properties
     print(f"\n3. Analyzing shell properties...")
@@ -128,9 +128,9 @@ def main():
         n_pixels_with_mass = jnp.sum(shell_map > 0)
         max_density = jnp.max(shell_map)
         
-        print(f"   Shell {i}: z={z:.3f}, total_mass={total_mass:.2e} Msun/h")
-        print(f"            {n_pixels_with_mass}/{12*nside**2} pixels have mass")
-        print(f"            max surface density={max_density:.2e} Msun/h/(Mpc/h)²")
+        print(f"   Shell {i}: z={float(z):.3f}, total_mass={float(total_mass):.2e} Msun/h")
+        print(f"            {int(n_pixels_with_mass)}/{12*nside**2} pixels have mass")
+        print(f"            max surface density={float(max_density):.2e} Msun/h/(Mpc/h)²")
     
     # Convert to convergence maps for lensing
     source_redshift = 1.0
@@ -143,9 +143,9 @@ def main():
     for i, z in enumerate(shell_redshifts):
         if z < source_redshift:
             max_kappa = jnp.max(convergence_maps[i])
-            print(f"   Shell {i} (z={z:.3f}): max convergence = {max_kappa:.4f}")
+            print(f"   Shell {i} (z={float(z):.3f}): max convergence = {float(max_kappa):.4f}")
         else:
-            print(f"   Shell {i} (z={z:.3f}): behind source, convergence = 0")
+            print(f"   Shell {i} (z={float(z):.3f}): behind source, convergence = 0")
     
     # Visualization
     print(f"\n5. Creating visualizations...")
@@ -158,7 +158,7 @@ def main():
         # Surface density map
         hp.mollview(
             np.array(shell_maps[i]), 
-            title=f'Shell {i}: Surface Density (z={shell_redshifts[i]:.3f})',
+            title=f'Shell {i}: Surface Density (z={float(shell_redshifts[i]):.3f})',
             unit='Msun/h/(Mpc/h)²',
             sub=(2, 2, 2*i + 1),
             cmap='viridis'
@@ -168,7 +168,7 @@ def main():
         if shell_redshifts[i] < source_redshift:
             hp.mollview(
                 np.array(convergence_maps[i]),
-                title=f'Shell {i}: Convergence (z={shell_redshifts[i]:.3f})',
+                title=f'Shell {i}: Convergence (z={float(shell_redshifts[i]):.3f})',
                 unit='κ',
                 sub=(2, 2, 2*i + 2),
                 cmap='RdBu_r'
@@ -176,7 +176,7 @@ def main():
         else:
             # Empty plot for shells behind source
             ax = plt.subplot(2, 2, 2*i + 2)
-            ax.text(0.5, 0.5, f'Shell behind source\n(z={shell_redshifts[i]:.3f} > {source_redshift})',
+            ax.text(0.5, 0.5, f'Shell behind source\n(z={float(shell_redshifts[i]):.3f} > {source_redshift})',
                    ha='center', va='center', transform=ax.transAxes, fontsize=12)
             ax.set_xticks([])
             ax.set_yticks([])

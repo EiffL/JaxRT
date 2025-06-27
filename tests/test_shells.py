@@ -230,3 +230,29 @@ def test_observer_position_effect():
     
     # Results should be different
     assert not jnp.allclose(shell_map1, shell_map2)
+
+
+def test_input_validation():
+    """Test input validation functions."""
+    from jaxrt.planes.shells import _validate_inputs
+    
+    # Test negative masses
+    with pytest.raises(ValueError, match="non-negative"):
+        _validate_inputs(jnp.array([-1, 1]), 8, jnp.array([10.0]))
+    
+    # Test invalid nside
+    with pytest.raises(ValueError, match="power of 2"):
+        _validate_inputs(jnp.array([1, 1]), 7, jnp.array([10.0]))
+    
+    with pytest.raises(ValueError, match="power of 2"):
+        _validate_inputs(jnp.array([1, 1]), 0, jnp.array([10.0]))
+    
+    # Test non-positive distances
+    with pytest.raises(ValueError, match="positive"):
+        _validate_inputs(jnp.array([1, 1]), 8, jnp.array([0.0]))
+    
+    with pytest.raises(ValueError, match="positive"):
+        _validate_inputs(jnp.array([1, 1]), 8, jnp.array([-1.0]))
+    
+    # Test valid inputs (should not raise)
+    _validate_inputs(jnp.array([1, 1]), 8, jnp.array([10.0]))
